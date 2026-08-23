@@ -5,6 +5,7 @@ import { ApiError } from "../../utils/apiError";
 import { getAuthUrl, handleOAuthCallback, isCalendarConfigured } from "./googleCalendar.service";
 import { signToken } from "../../middleware/auth";
 import { env } from "../../config/env";
+import { prisma } from "../../lib/prisma";
 import jwt from "jsonwebtoken";
 
 const router = Router();
@@ -46,7 +47,6 @@ router.get(
   "/status",
   requireAuth,
   asyncHandler(async (req, res) => {
-    const { prisma } = await import("../../lib/prisma");
     const token = await prisma.googleToken.findUnique({ where: { userId: req.auth!.userId } });
     res.json({ connected: Boolean(token), configured: isCalendarConfigured() });
   })
