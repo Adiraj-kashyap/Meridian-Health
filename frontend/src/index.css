@@ -1,0 +1,122 @@
+@import "tailwindcss";
+
+@theme {
+  /* Type */
+  --font-display: "Fraunces", "Iowan Old Style", serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", "SFMono-Regular", monospace;
+
+  /* Palette — warm clinical: deep pine trust, terracotta warmth, parchment
+     paper, never a purple gradient in sight. */
+  --color-ink: #1c1b17;
+  --color-ink-soft: #423f36;
+  --color-parchment: #f6f1e7;
+  --color-parchment-deep: #ede4d0;
+  --color-paper: #fffdf8;
+  --color-pine-950: #0f2b20;
+  --color-pine-900: #163a2c;
+  --color-pine-700: #1f4d3a;
+  --color-pine-500: #2f6b4f;
+  --color-pine-300: #6a9a7f;
+  --color-sage-200: #dbe6d6;
+  --color-sage-100: #ecf1e8;
+  --color-terracotta-800: #8a4720;
+  --color-terracotta-700: #a85a2c;
+  --color-terracotta-500: #c9703d;
+  --color-terracotta-300: #e0925c;
+  --color-gold-400: #f2c879;
+  --color-gold-200: #f8e3b8;
+  --color-clay-600: #9c3327;
+  --color-clay-400: #b23b2e;
+
+  --shadow-soft: 0 1px 2px rgba(28, 27, 23, 0.04), 0 8px 24px -8px rgba(28, 27, 23, 0.12);
+  --shadow-lift: 0 4px 8px rgba(28, 27, 23, 0.06), 0 20px 40px -16px rgba(28, 27, 23, 0.22);
+}
+
+@layer base {
+  html {
+    color-scheme: light;
+  }
+  body {
+    background: var(--color-parchment);
+    color: var(--color-ink);
+    font-family: var(--font-body);
+    -webkit-font-smoothing: antialiased;
+  }
+  h1, h2, h3, h4 {
+    font-family: var(--font-display);
+    letter-spacing: -0.01em;
+  }
+  ::selection {
+    background: var(--color-gold-400);
+    color: var(--color-ink);
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-terracotta-500);
+    outline-offset: 2px;
+  }
+}
+
+@layer utilities {
+  /* Warm paper grain the whole app sits on, layered under content */
+  .bg-paper-grain {
+    background-color: var(--color-parchment);
+    background-image:
+      radial-gradient(circle at 1px 1px, rgba(28,27,23,0.05) 1px, transparent 0);
+    background-size: 22px 22px;
+  }
+
+  /* Duotone treatment for line-art SVG motifs: renders any monochrome
+     illustration in the pine/parchment pair so it reads as intentional
+     art rather than a stock photo drop-in. */
+  .duotone-pine {
+    filter: brightness(0) saturate(100%) invert(20%) sepia(15%) saturate(1400%) hue-rotate(108deg) brightness(90%);
+  }
+
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  .font-feature-tnum {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes draw-line {
+  from { stroke-dashoffset: var(--line-length, 400); }
+  to { stroke-dashoffset: 0; }
+}
+@keyframes drift {
+  0%, 100% { transform: translate(0, 0) rotate(0deg); }
+  50% { transform: translate(12px, -10px) rotate(2deg); }
+}
+@keyframes pulse-soft {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 0.7; }
+}
+@keyframes shimmer {
+  0% { background-position: -400px 0; }
+  100% { background-position: 400px 0; }
+}
+.skeleton {
+  background-image: linear-gradient(90deg, var(--color-parchment-deep) 25%, var(--color-sage-100) 37%, var(--color-parchment-deep) 63%);
+  background-size: 400px 100%;
+  animation: shimmer 1.6s ease-in-out infinite;
+}
+
+.animate-rise-in { animation: rise-in 0.7s cubic-bezier(0.16, 1, 0.3, 1) both; }
+.animate-draw-line { animation: draw-line 1.8s ease-out forwards; }
+.animate-drift { animation: drift 9s ease-in-out infinite; }
+.animate-pulse-soft { animation: pulse-soft 3.5s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
