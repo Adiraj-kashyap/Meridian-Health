@@ -1,0 +1,265 @@
+// Healthcare Appointment & Follow-up Manager — Database Schema
+// See docs/DB_SCHEMA.md for the annotated ER diagram and design rationale.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ──────────────────────────────────────────────────────────────
+
+enum Role {
+  PATIENT
+  DOCTOR
+  ADMIN
+}
+
+enum AppointmentStatus {
+  HELD // slot reserved while patient fills the symptom form; expires if not confirmed
+  CONFIRMED
+  CANCELLED
+  COMPLETED
+  NO_SHOW
+}
+
+enum Urgency {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum LlmStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+enum NotificationType {
+  BOOKING_CONFIRMATION
+  APPOINTMENT_REMINDER
+  CANCELLATION
+  RESCHEDULE
+  LEAVE_NOTICE
+  MEDICATION_REMINDER
+  POST_VISIT_SUMMARY
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+  ABANDONED // exceeded max retry attempts
+}
+
+// ─── Identity ───────────────────────────────────────────────────────────
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  role         Role
+  name         String
+  phone        String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  patientProfile PatientProfile?
+  doctorProfile  DoctorProfile?
+  notifications  Notification[]
+  googleToken    GoogleToken?
+
+  @@index([role])
+}
+
+model GoogleToken {
+  id           String   @id @default(uuid())
+  userId       String   @unique
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken  String   @db.Text
+  refreshToken String   @db.Text
+  expiryDate   DateTime
+  scope        String
+  connectedAt  DateTime @default(now())
+}
+
+// ─── Patients ───────────────────────────────────────────────────────────
+
+model PatientProfile {
+  id           String    @id @default(uuid())
+  userId       String    @unique
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  dateOfBirth  DateTime?
+  gender       String?
+  bloodGroup   String?
+  createdAt    DateTime  @default(now())
+
+  appointments Appointment[]
+}
+
+// ─── Doctors ────────────────────────────────────────────────────────────
+
+model DoctorProfile {
+  id                  String   @id @default(uuid())
+  userId              String   @unique
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  specialization      String
+  bio                 String?  @db.Text
+  qualifications       String?
+  slotDurationMinutes Int      @default(30)
+  consultationFee     Decimal? @db.Decimal(10, 2)
+  isActive            Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  workingHours WorkingHour[]
+  leaveDays    LeaveDay[]
+  appointments Appointment[]
+
+  @@index([specialization])
+}
+
+// Recurring weekly availability, e.g. Mon 09:00-17:00
+model WorkingHour {
+  id        String        @id @default(uuid())
+  doctorId  String
+  doctor    DoctorProfile @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  dayOfWeek Int // 0 = Sunday ... 6 = Saturday
+  startTime String // "HH:mm" 24h, doctor's local clinic time
+  endTime   String // "HH:mm"
+
+  @@unique([doctorId, dayOfWeek])
+}
+
+// One-off leave / unavailability for a specific calendar date
+model LeaveDay {
+  id        String        @id @default(uuid())
+  doctorId  String
+  doctor    DoctorProfile @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  date      DateTime      @db.Date
+  reason    String?
+  createdAt DateTime      @default(now())
+
+  @@unique([doctorId, date])
+  @@index([doctorId, date])
+}
+
+// ─── Appointments (the concurrency-critical core) ──────────────────────
+
+model Appointment {
+  id             String            @id @default(uuid())
+  patientId      String
+  patient        PatientProfile    @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  doctorId       String
+  doctor         DoctorProfile     @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  slotStart      DateTime
+  slotEnd        DateTime
+  status         AppointmentStatus @default(HELD)
+  holdExpiresAt  DateTime? // only set while status = HELD; the slot-hold mechanism
+  cancelledBy    Role?
+  cancelledReason String?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  symptomForm  SymptomForm?
+  visitNote    VisitNote?
+  notifications Notification[]
+  medicationReminders MedicationReminder[]
+
+  googleEventIdPatient String?
+  googleEventIdDoctor  String?
+
+  // The single most important constraint in the schema: no two rows can
+  // occupy the same doctor+start-time, HELD or CONFIRMED alike. This is
+  // what makes double-booking impossible at the database level, even
+  // under concurrent requests — see docs/SYSTEM_DESIGN.md.
+  @@unique([doctorId, slotStart])
+  @@index([patientId, slotStart])
+  @@index([doctorId, status])
+}
+
+// ─── Pre-visit symptom intake + LLM summary ────────────────────────────
+
+model SymptomForm {
+  id                 String       @id @default(uuid())
+  appointmentId      String       @unique
+  appointment        Appointment  @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  symptomsText       String       @db.Text
+  durationDays       Int?
+  severitySelfRating Int? // 1-10, patient-reported
+
+  // LLM-generated pre-visit summary (graceful-degradation fields)
+  llmStatus          LlmStatus    @default(PENDING)
+  urgencyLevel       Urgency?
+  chiefComplaint     String?      @db.Text
+  suggestedQuestions Json? // string[]
+  llmError           String?
+  llmRetryCount      Int          @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ─── Post-visit clinical notes + LLM patient-friendly summary ─────────
+
+model VisitNote {
+  id            String      @id @default(uuid())
+  appointmentId String      @unique
+  appointment   Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+
+  clinicalNotes String      @db.Text
+  prescription  Json // PrescriptionItem[] — see docs/API.md for shape
+  diagnosis     String?
+
+  // LLM-generated patient-friendly rewrite (graceful-degradation fields)
+  llmStatus       LlmStatus @default(PENDING)
+  patientSummary  String?   @db.Text
+  followUpSteps   String?   @db.Text
+  llmError        String?
+  llmRetryCount   Int       @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// One row per scheduled dose reminder, expanded from the prescription's
+// frequency at post-visit-note creation time.
+model MedicationReminder {
+  id            String      @id @default(uuid())
+  appointmentId String
+  appointment   Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  medication    String
+  dosage        String?
+  scheduledAt   DateTime
+  sent          Boolean     @default(false)
+  sentAt        DateTime?
+  createdAt     DateTime    @default(now())
+
+  @@index([scheduledAt, sent])
+}
+
+// ─── Notifications (email, with retry queue) ───────────────────────────
+
+model Notification {
+  id            String              @id @default(uuid())
+  userId        String
+  user          User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  appointmentId String?
+  appointment   Appointment?        @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+  type          NotificationType
+  channel       String              @default("email")
+  status        NotificationStatus  @default(PENDING)
+  subject       String
+  body          String              @db.Text
+  attempts      Int                 @default(0)
+  maxAttempts   Int                 @default(5)
+  nextAttemptAt DateTime            @default(now())
+  lastError     String?
+  createdAt     DateTime            @default(now())
+  sentAt        DateTime?
+
+  @@index([status, nextAttemptAt])
+}
